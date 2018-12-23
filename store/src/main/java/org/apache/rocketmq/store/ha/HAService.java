@@ -52,7 +52,7 @@ public class HAService {
     private final DefaultMessageStore defaultMessageStore;
 
     private final WaitNotifyObject waitNotifyObject = new WaitNotifyObject();
-    private final AtomicLong push2SlaveMaxOffset = new AtomicLong(0);
+    private final AtomicLong push2SlaveMaxOffset = new AtomicLong(0);//记录slave的同步位置
 
     private final GroupTransferService groupTransferService;
 
@@ -62,7 +62,7 @@ public class HAService {
         this.defaultMessageStore = defaultMessageStore;
         this.acceptSocketService =
             new AcceptSocketService(defaultMessageStore.getMessageStoreConfig().getHaListenPort());
-        this.groupTransferService = new GroupTransferService();
+        this.groupTransferService = new GroupTransferService();//类似广播服务，查看slave数据同步情况
         this.haClient = new HAClient();
     }
 
@@ -77,11 +77,12 @@ public class HAService {
     }
 
     public boolean isSlaveOK(final long masterPutWhere) {
-        boolean result = this.connectionCount.get() > 0;
+        boolean result = this.connectionCount.get() > 0;//当前连接到master的salve个数
         result =
             result
                 && ((masterPutWhere - this.push2SlaveMaxOffset.get()) < this.defaultMessageStore
                 .getMessageStoreConfig().getHaSlaveFallbehindMax());
+        //当前主从同步如果存在不一致，落后的偏移量是否小于允许的偏移量,如果如果小于，证明主从节点网络通畅、数据同步正常，
         return result;
     }
 
@@ -156,7 +157,7 @@ public class HAService {
     /**
      * Listens to slave connections to create {@link HAConnection}.
      */
-    class AcceptSocketService extends ServiceThread {
+    class AcceptSocketService extends ServiceThread {//监听来自slave的连接请求，同步数据
         private final SocketAddress socketAddressListen;
         private ServerSocketChannel serverSocketChannel;
         private Selector selector;
@@ -215,6 +216,7 @@ public class HAService {
                                         + sc.socket().getRemoteSocketAddress());
 
                                     try {
+                                        //每个salve的请求由单独的HAConnection 处理
                                         HAConnection conn = new HAConnection(HAService.this, sc);
                                         conn.start();
                                         HAService.this.addConnection(conn);
@@ -250,12 +252,17 @@ public class HAService {
     /**
      * GroupTransferService Service
      */
+    //
     class GroupTransferService extends ServiceThread {
 
         private final WaitNotifyObject notifyTransferObject = new WaitNotifyObject();
         private volatile List<CommitLog.GroupCommitRequest> requestsWrite = new ArrayList<>();
         private volatile List<CommitLog.GroupCommitRequest> requestsRead = new ArrayList<>();
 
+        /**
+         * 待处理同步请求
+         * @param request
+         */
         public synchronized void putRequest(final CommitLog.GroupCommitRequest request) {
             synchronized (this.requestsWrite) {
                 this.requestsWrite.add(request);
@@ -279,16 +286,19 @@ public class HAService {
             synchronized (this.requestsRead) {
                 if (!this.requestsRead.isEmpty()) {
                     for (CommitLog.GroupCommitRequest req : this.requestsRead) {
+                        //如果slave已同步数据的偏移量大于当前要求的偏移量，则数据已经同步到slave，transferOK = true
                         boolean transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
                         for (int i = 0; !transferOK && i < 5; i++) {
+                            //如果还未同步，等到1s
                             this.notifyTransferObject.waitForRunning(1000);
+                            //再次check最新同步点，反复五次
                             transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
                         }
 
-                        if (!transferOK) {
+                        if (!transferOK) {//
                             log.warn("transfer messsage to slave timeout, " + req.getNextOffset());
                         }
-
+                        //唤醒等待HA的线程，通知数据同步结果
                         req.wakeupCustomer(transferOK);
                     }
 
@@ -495,7 +505,7 @@ public class HAService {
 
         private boolean connectMaster() throws ClosedChannelException {
             if (null == socketChannel) {
-                String addr = this.masterAddress.get();
+                String addr = this.masterAddress.get();//如果是当前节点是master，则addr = null
                 if (addr != null) {
 
                     SocketAddress socketAddress = RemotingUtil.string2SocketAddress(addr);

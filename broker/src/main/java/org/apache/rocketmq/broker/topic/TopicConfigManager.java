@@ -148,8 +148,10 @@ public class TopicConfigManager extends ConfigManager {
         boolean createNew = false;
 
         try {
+            //先获取锁，防止多个线程创建
             if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
+                    //得到锁后，先检查是否已经被其他线程创建，如果已经被其他的线程创建，直接返回
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
                         return topicConfig;

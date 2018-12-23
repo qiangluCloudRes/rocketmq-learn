@@ -43,6 +43,7 @@ public class MappedFileQueue {
 
     private final AllocateMappedFileService allocateMappedFileService;
 
+    //已刷盘到当前位置。broker初始化时会初始化当前值为上一次刷盘的位置
     private long flushedWhere = 0;
     private long committedWhere = 0;
 
@@ -50,8 +51,8 @@ public class MappedFileQueue {
 
     public MappedFileQueue(final String storePath, int mappedFileSize,
         AllocateMappedFileService allocateMappedFileService) {
-        this.storePath = storePath;
-        this.mappedFileSize = mappedFileSize;
+        this.storePath = storePath;//存储路径
+        this.mappedFileSize = mappedFileSize;//文件大小
         this.allocateMappedFileService = allocateMappedFileService;
     }
 
@@ -146,12 +147,13 @@ public class MappedFileQueue {
 
     public boolean load() {
         File dir = new File(this.storePath);
-        File[] files = dir.listFiles();
+        File[] files = dir.listFiles();//得到所有存储路径下的所有file文件
         if (files != null) {
             // ascending order
-            Arrays.sort(files);
+            Arrays.sort(files);//排序
             for (File file : files) {
 
+                //commitLog 或 consumeQueue 文件没有达到规定的文件大小,忽略，即可能不是由broker创建的文件
                 if (file.length() != this.mappedFileSize) {
                     log.warn(file + "\t" + file.length()
                         + " length not matched message store config value, ignore it");
@@ -159,12 +161,12 @@ public class MappedFileQueue {
                 }
 
                 try {
-                    MappedFile mappedFile = new MappedFile(file.getPath(), mappedFileSize);
+                    MappedFile mappedFile = new MappedFile(file.getPath(), mappedFileSize);//得到当前文件
 
-                    mappedFile.setWrotePosition(this.mappedFileSize);
-                    mappedFile.setFlushedPosition(this.mappedFileSize);
-                    mappedFile.setCommittedPosition(this.mappedFileSize);
-                    this.mappedFiles.add(mappedFile);
+                    mappedFile.setWrotePosition(this.mappedFileSize);//得到当前文件的写入位置
+                    mappedFile.setFlushedPosition(this.mappedFileSize);//当前文件的刷盘位置
+                    mappedFile.setCommittedPosition(this.mappedFileSize);//当前文件的提交文职
+                    this.mappedFiles.add(mappedFile);//执行结束后，mappedFiles包含当前节点的所有commitLog文件的引用
                     log.info("load " + file.getPath() + " OK");
                 } catch (IOException e) {
                     log.error("load file " + file + " error", e);
@@ -237,6 +239,10 @@ public class MappedFileQueue {
         return getLastMappedFile(startOffset, true);
     }
 
+    /**
+     * 获取最新的一个mappedFile
+     * @return
+     */
     public MappedFile getLastMappedFile() {
         MappedFile mappedFileLast = null;
 
@@ -299,6 +305,10 @@ public class MappedFileQueue {
         return -1;
     }
 
+    /**
+     * 获取最大的偏移量，根据：最新的一个mappedFile文件名 + 当前这个文件最大能读取位置（即合法数据）
+     * @return
+     */
     public long getMaxOffset() {
         MappedFile mappedFile = getLastMappedFile();
         if (mappedFile != null) {

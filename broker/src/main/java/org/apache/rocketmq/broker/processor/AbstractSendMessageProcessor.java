@@ -68,6 +68,12 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
                 .getNettyServerConfig().getListenPort());
     }
 
+    /**
+     * 构建消息上下文信息，生产组、主题、队列Id、消息属性等等属性数据
+     * @param ctx
+     * @param requestHeader
+     * @return
+     */
     protected SendMessageContext buildMsgContext(ChannelHandlerContext ctx,
         SendMessageRequestHeader requestHeader) {
         if (!this.hasSendMessageHook()) {
@@ -176,11 +182,16 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
             return response;
         }
 
+
+        //从当前节点获取topic信息
         TopicConfig topicConfig =
             this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
         if (null == topicConfig) {
             int topicSysFlag = 0;
             if (requestHeader.isUnitMode()) {
+                //判断是否是retry topic
+                // consumer 处理消息失败后，消息会放到retry topic，不会因为某个消息失败而导致消费进度被拖延
+                // 每个topic 都会对应有一个retry topic，用户消费失败的消息。retry topic的消息会被定期清除
                 if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                     topicSysFlag = TopicSysFlag.buildSysFlag(false, true);
                 } else {
@@ -189,17 +200,23 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
             }
 
             log.warn("the topic {} not exist, producer: {}", requestHeader.getTopic(), ctx.channel().remoteAddress());
+            //创建topic
             topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageMethod(
-                requestHeader.getTopic(),
+                requestHeader.getTopic(),//要创建的topic名称
                 requestHeader.getDefaultTopic(),
                 RemotingHelper.parseChannelRemoteAddr(ctx.channel()),
-                requestHeader.getDefaultTopicQueueNums(), topicSysFlag);
+                requestHeader.getDefaultTopicQueueNums(),//topic包含的队列数量
+                    topicSysFlag);
 
+
+            //创建topic失败
             if (null == topicConfig) {
-                if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
+                if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {//创建retry topic
                     topicConfig =
                         this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
-                            requestHeader.getTopic(), 1, PermName.PERM_WRITE | PermName.PERM_READ,
+                            requestHeader.getTopic(),
+                                1,//retry topic 只有一个topic
+                                PermName.PERM_WRITE | PermName.PERM_READ,
                             topicSysFlag);
                 }
             }
@@ -211,7 +228,7 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
                 return response;
             }
         }
-
+        //获取队列Id，校验queueId 是否合法
         int queueIdInt = requestHeader.getQueueId();
         int idValid = Math.max(topicConfig.getWriteQueueNums(), topicConfig.getReadQueueNums());
         if (queueIdInt >= idValid) {
@@ -279,7 +296,7 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
 
         SendMessageRequestHeaderV2 requestHeaderV2 = null;
         SendMessageRequestHeader requestHeader = null;
-        switch (request.getCode()) {
+        switch (request.getCode()) {//根据不同的版本处理请求头
             case RequestCode.SEND_BATCH_MESSAGE:
             case RequestCode.SEND_MESSAGE_V2:
                 requestHeaderV2 =

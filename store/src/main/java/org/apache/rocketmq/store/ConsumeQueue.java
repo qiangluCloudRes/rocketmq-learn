@@ -52,7 +52,8 @@ public class ConsumeQueue {
         this.storePath = storePath;
         this.mappedFileSize = mappedFileSize;
         this.defaultMessageStore = defaultMessageStore;
-
+        // /mnt/sdf/rocketmq/data/store1/consumequeue/GetFollowerClientEvents/0
+        //  文件夹0中包含：00000000000000000000  00000000000050000000 两个文件
         this.topic = topic;
         this.queueId = queueId;
 
@@ -64,7 +65,7 @@ public class ConsumeQueue {
 
         this.byteBufferIndex = ByteBuffer.allocate(CQ_STORE_UNIT_SIZE);
 
-        if (defaultMessageStore.getMessageStoreConfig().isEnableConsumeQueueExt()) {
+        if (defaultMessageStore.getMessageStoreConfig().isEnableConsumeQueueExt()) {//ConsumeQueueExt 何用？
             this.consumeQueueExt = new ConsumeQueueExt(
                 topic,
                 queueId,
@@ -85,6 +86,7 @@ public class ConsumeQueue {
     }
 
     public void recover() {
+
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
         if (!mappedFiles.isEmpty()) {
 

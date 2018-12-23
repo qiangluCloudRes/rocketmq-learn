@@ -22,6 +22,12 @@ public class TopicSysFlag {
 
     private final static int FLAG_UNIT_SUB = 0x1 << 1;
 
+    /**
+     *
+     * @param unit true 创建一般的topic
+     * @param hasUnitSub true 创建 retry topic
+     * @return
+     */
     public static int buildSysFlag(final boolean unit, final boolean hasUnitSub) {
         int sysFlag = 0;
 

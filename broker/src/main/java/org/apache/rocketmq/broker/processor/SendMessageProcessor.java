@@ -59,26 +59,33 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         super(brokerController);
     }
 
+    /**
+     *  当producer发送消息到broker时，收到请求后，由当前方法处理消息
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     @Override
     public RemotingCommand processRequest(ChannelHandlerContext ctx,
         RemotingCommand request) throws RemotingCommandException {
         SendMessageContext mqtraceContext;
         switch (request.getCode()) {
-            case RequestCode.CONSUMER_SEND_MSG_BACK:
+            case RequestCode.CONSUMER_SEND_MSG_BACK://消息回放，消费这处理此消息时，决定放回队列，稍后再处理
                 return this.consumerSendMsgBack(ctx, request);
             default:
-                SendMessageRequestHeader requestHeader = parseRequestHeader(request);
+                SendMessageRequestHeader requestHeader = parseRequestHeader(request);//处理请求头，兼容不同版本传递的请求头
                 if (requestHeader == null) {
                     return null;
                 }
 
-                mqtraceContext = buildMsgContext(ctx, requestHeader);
-                this.executeSendMessageHookBefore(ctx, request, mqtraceContext);
+                mqtraceContext = buildMsgContext(ctx, requestHeader);//构建消息属性信息
+                this.executeSendMessageHookBefore(ctx, request, mqtraceContext);//用来干什么？
 
                 RemotingCommand response;
-                if (requestHeader.isBatch()) {
+                if (requestHeader.isBatch()) {//消息批量发送处理
                     response = this.sendBatchMessage(ctx, request, mqtraceContext, requestHeader);
-                } else {
+                } else {//非批量发送
                     response = this.sendMessage(ctx, request, mqtraceContext, requestHeader);
                 }
 
@@ -297,7 +304,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         final RemotingCommand response = RemotingCommand.createResponseCommand(SendMessageResponseHeader.class);
         final SendMessageResponseHeader responseHeader = (SendMessageResponseHeader) response.readCustomHeader();
-
+        //获取请求标记（RPC原理）
         response.setOpaque(request.getOpaque());
 
         response.addExtField(MessageConst.PROPERTY_MSG_REGION, this.brokerController.getBrokerConfig().getRegionId());
@@ -305,46 +312,54 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         log.debug("receive SendMessage request command, {}", request);
 
+        /**
+         * 获取broker接受消息请求的时间配置
+         */
         final long startTimstamp = this.brokerController.getBrokerConfig().getStartAcceptSendRequestTimeStamp();
-        if (this.brokerController.getMessageStore().now() < startTimstamp) {
+        if (this.brokerController.getMessageStore().now() < startTimstamp) {//当前事件小于配置的时间，暂时无法提供服务
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimstamp)));
             return response;
         }
 
         response.setCode(-1);
-        super.msgCheck(ctx, requestHeader, response);
-        if (response.getCode() != -1) {
+        super.msgCheck(ctx, requestHeader, response);//消息前置校验，主要校验topic是否已存在，消息发往的queueId是否合法
+        if (response.getCode() != -1) {//校验失败直接返回
             return response;
         }
 
-        final byte[] body = request.getBody();
+        final byte[] body = request.getBody();//获取消息内容
         System.out.println(new String(body));
-        int queueIdInt = requestHeader.getQueueId();
+        int queueIdInt = requestHeader.getQueueId();//获取队列Id
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
 
-        if (queueIdInt < 0) {
+        if (queueIdInt < 0) {//如果消息指定的queueId 非法,则随机选择一个队列发送
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
         }
 
-        MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
-        msgInner.setTopic(requestHeader.getTopic());
-        msgInner.setQueueId(queueIdInt);
+        MessageExtBrokerInner msgInner = new MessageExtBrokerInner();//创建消息写入实例
+        msgInner.setTopic(requestHeader.getTopic());//指定主题
+        msgInner.setQueueId(queueIdInt);//指定队列
 
         if (!handleRetryAndDLQ(requestHeader, response, request, msgInner, topicConfig)) {
             return response;
         }
 
-        msgInner.setBody(body);
+        msgInner.setBody(body);//添加消息的内容
         msgInner.setFlag(requestHeader.getFlag());
         MessageAccessor.setProperties(msgInner, MessageDecoder.string2messageProperties(requestHeader.getProperties()));
-        msgInner.setPropertiesString(requestHeader.getProperties());
-        msgInner.setBornTimestamp(requestHeader.getBornTimestamp());
-        msgInner.setBornHost(ctx.channel().remoteAddress());
-        msgInner.setStoreHost(this.getStoreHost());
+        msgInner.setPropertiesString(requestHeader.getProperties());//保存producer提交的消息属性
+        msgInner.setBornTimestamp(requestHeader.getBornTimestamp());//生成消息的时间戳
+        msgInner.setBornHost(ctx.channel().remoteAddress());//发送消息的服务器
+        msgInner.setStoreHost(this.getStoreHost());//负责存储消息的台服务器
+        //设置Reconsume时间
         msgInner.setReconsumeTimes(requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes());
 
+        /**
+         * 判断当前节点是否拒绝接受事务消息
+         */
         if (this.brokerController.getBrokerConfig().isRejectTransactionMessage()) {
+            //如果当前消息是事务消息，拒绝此消息
             String traFlag = msgInner.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
             if (traFlag != null) {
                 response.setCode(ResponseCode.NO_PERMISSION);
@@ -353,7 +368,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 return response;
             }
         }
-
+        //保存消息到commitLog
         PutMessageResult putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
 
         return handlePutMessageResult(putMessageResult, response, request, msgInner, responseHeader, sendMessageContext, ctx, queueIdInt);

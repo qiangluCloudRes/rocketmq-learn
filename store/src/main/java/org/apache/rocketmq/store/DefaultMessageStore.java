@@ -35,6 +35,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+
+import com.alibaba.fastjson.JSONObject;
 import org.apache.rocketmq.common.BrokerConfig;
 import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.ServiceThread;
@@ -118,19 +120,24 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerConfig = brokerConfig;
         this.messageStoreConfig = messageStoreConfig;
         this.brokerStatsManager = brokerStatsManager;
+
+        //commitLog磁盘空间申请逻辑，当一个commitLog被写满之后，需要申请下一个commitLog文件
         this.allocateMappedFileService = new AllocateMappedFileService(this);
+        //消息存储文件,所有被当前broker节点收到的消息都会保存在这个文件中
         this.commitLog = new CommitLog(this);
+        //队列表
         this.consumeQueueTable = new ConcurrentHashMap<>(32);
 
-        this.flushConsumeQueueService = new FlushConsumeQueueService();
-        this.cleanCommitLogService = new CleanCommitLogService();
-        this.cleanConsumeQueueService = new CleanConsumeQueueService();
+        this.flushConsumeQueueService = new FlushConsumeQueueService();//队列刷盘业务
+        this.cleanCommitLogService = new CleanCommitLogService();//commitLog清除业务 ，commitLog过期或者磁盘空间不足，清磁盘？
+        this.cleanConsumeQueueService = new CleanConsumeQueueService();//过期文件清除服务
         this.storeStatsService = new StoreStatsService();
-        this.indexService = new IndexService(this);
-        this.haService = new HAService(this);
+        this.indexService = new IndexService(this);// 索引文件处理业务
+        this.haService = new HAService(this);//高可用,包含master和slave的数据同步细节
 
-        this.reputMessageService = new ReputMessageService();
+        this.reputMessageService = new ReputMessageService();//构建索引在此服务内触发，定时调度，根据commitLog偏移量，构建索引
 
+        //延时消息处理
         this.scheduleMessageService = new ScheduleMessageService(this);
 
         this.transientStorePool = new TransientStorePool(messageStoreConfig);
@@ -139,14 +146,15 @@ public class DefaultMessageStore implements MessageStore {
             this.transientStorePool.init();
         }
 
-        this.allocateMappedFileService.start();
+        this.allocateMappedFileService.start();//启动线程
 
-        this.indexService.start();
+        this.indexService.start();//索引业务，生成commitLog 中存储的每一条消息的索引地址，此处start不做任务操作
 
         this.dispatcherList = new LinkedList<>();
-        this.dispatcherList.addLast(new CommitLogDispatcherBuildConsumeQueue());
-        this.dispatcherList.addLast(new CommitLogDispatcherBuildIndex());
+        this.dispatcherList.addLast(new CommitLogDispatcherBuildConsumeQueue());//猜想：更新消费队列的index
+        this.dispatcherList.addLast(new CommitLogDispatcherBuildIndex());//索引构建队列
 
+        //当前节点使用文件方式进行加锁，防止多线程处理问题
         File file = new File(StorePathConfigHelper.getLockFile(messageStoreConfig.getStorePathRootDir()));
         MappedFile.ensureDirOK(file.getParent());
         lockFile = new RandomAccessFile(file, "rw");
@@ -177,18 +185,18 @@ public class DefaultMessageStore implements MessageStore {
             }
 
             // load Commit Log
-            result = result && this.commitLog.load();
+            result = result && this.commitLog.load();//加载commitLog文件
 
             // load Consume Queue
-            result = result && this.loadConsumeQueue();
+            result = result && this.loadConsumeQueue();//加载commitLog文件成功，继续加载消费队列的信息
 
-            if (result) {
+            if (result) {//commitLog、所有topic的队列信息均加载成功后：核对存储文件（是否安全退出，是否需要做其他弥补操作）、加载索引文件
                 this.storeCheckpoint =
                     new StoreCheckpoint(StorePathConfigHelper.getStoreCheckpoint(this.messageStoreConfig.getStorePathRootDir()));
 
-                this.indexService.load(lastExitOK);
+                this.indexService.load(lastExitOK);//索引文件加载
 
-                this.recover(lastExitOK);
+                this.recover(lastExitOK);//恢复
 
                 log.info("load over, and the max phy offset = {}", this.getMaxPhyOffset());
             }
@@ -303,20 +311,23 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public PutMessageResult putMessage(MessageExtBrokerInner msg) {
-        if (this.shutdown) {
+        if (this.shutdown) {//存储服务挂掉，拒绝服务
             log.warn("message store has shutdown, so putMessage is forbidden");
             return new PutMessageResult(PutMessageStatus.SERVICE_NOT_AVAILABLE, null);
         }
 
-        if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
+        if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {//当前节点是slave，拒绝服务（slave不允许写操作）
             long value = this.printTimes.getAndIncrement();
-            if ((value % 50000) == 0) {
+            if ((value % 50000) == 0) {//设置这个。。。。估计是达到某个次数再提示
                 log.warn("message store is slave mode, so putMessage is forbidden ");
             }
 
             return new PutMessageResult(PutMessageStatus.SERVICE_NOT_AVAILABLE, null);
         }
 
+        /**
+         * 节点当前不可写
+         */
         if (!this.runningFlags.isWriteable()) {
             long value = this.printTimes.getAndIncrement();
             if ((value % 50000) == 0) {
@@ -328,27 +339,33 @@ public class DefaultMessageStore implements MessageStore {
             this.printTimes.set(0);
         }
 
+        //校验topic长度合法性
         if (msg.getTopic().length() > Byte.MAX_VALUE) {
             log.warn("putMessage message topic length too long " + msg.getTopic().length());
             return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
         }
 
+        //消息属性太多，拒绝
         if (msg.getPropertiesString() != null && msg.getPropertiesString().length() > Short.MAX_VALUE) {
             log.warn("putMessage message properties length too long " + msg.getPropertiesString().length());
             return new PutMessageResult(PutMessageStatus.PROPERTIES_SIZE_EXCEEDED, null);
         }
 
+        //查看当前操作系统页缓存是否繁忙，如果繁忙拒绝当前请求写入
         if (this.isOSPageCacheBusy()) {
             return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, null);
         }
 
         long beginTime = this.getSystemClock().now();
+        //消息写入commitLog
         PutMessageResult result = this.commitLog.putMessage(msg);
 
         long eclipseTime = this.getSystemClock().now() - beginTime;
+        //获取本次写入操作消耗时间
         if (eclipseTime > 500) {
             log.warn("putMessage not in lock eclipse time(ms)={}, bodyLength={}", eclipseTime, msg.getBody().length);
         }
+
         this.storeStatsService.setPutMessageEntireTimeMax(eclipseTime);
 
         if (null == result || !result.isOk()) {
@@ -1238,20 +1255,20 @@ public class DefaultMessageStore implements MessageStore {
         return file.exists();
     }
 
-    private boolean loadConsumeQueue() {
+    private boolean loadConsumeQueue() {//
         File dirLogic = new File(StorePathConfigHelper.getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()));
-        File[] fileTopicList = dirLogic.listFiles();
+        File[] fileTopicList = dirLogic.listFiles();//获取消费队列的信息
         if (fileTopicList != null) {
-
+            //结构：E:\rocketmq\data\store1\consumequeue\NodeTopic_1\0\00000000000000000000
             for (File fileTopic : fileTopicList) {
-                String topic = fileTopic.getName();
+                String topic = fileTopic.getName();//获取topic名称，即: NodeTopic_1
 
-                File[] fileQueueIdList = fileTopic.listFiles();
+                File[] fileQueueIdList = fileTopic.listFiles();//获取当前topic下的队列文件，即：
                 if (fileQueueIdList != null) {
                     for (File fileQueueId : fileQueueIdList) {
                         int queueId;
                         try {
-                            queueId = Integer.parseInt(fileQueueId.getName());
+                            queueId = Integer.parseInt(fileQueueId.getName());//获取当前topic下，某个队列的Id，即：0
                         } catch (NumberFormatException e) {
                             continue;
                         }
@@ -1261,8 +1278,8 @@ public class DefaultMessageStore implements MessageStore {
                             StorePathConfigHelper.getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()),
                             this.getMessageStoreConfig().getMapedFileSizeConsumeQueue(),
                             this);
-                        this.putConsumeQueue(topic, queueId, logic);
-                        if (!logic.load()) {
+                        this.putConsumeQueue(topic, queueId, logic);//将当前队列信息加入到队列表，即某个topic包含哪些队列、队列信息
+                        if (!logic.load()) {//加载当前topic下，每个队列的信息，即文件大小、文件刷盘信息等
                             return false;
                         }
                     }
@@ -1276,15 +1293,15 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     private void recover(final boolean lastExitOK) {
-        this.recoverConsumeQueue();
+        this.recoverConsumeQueue();//恢复队列消费数据
 
-        if (lastExitOK) {
-            this.commitLog.recoverNormally();
+        if (lastExitOK) {//commitLog恢复，包含正常退出和非正常退出的恢复
+            this.commitLog.recoverNormally();//broker正常退出
         } else {
-            this.commitLog.recoverAbnormally();
+            this.commitLog.recoverAbnormally();//broker异常退出，比如kill 、断电等原因
         }
 
-        this.recoverTopicQueueTable();
+        this.recoverTopicQueueTable();//恢复队列存储的数据
     }
 
     public MessageStoreConfig getMessageStoreConfig() {
@@ -1307,6 +1324,7 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     private void recoverConsumeQueue() {
+        //遍历前面加载获取到的队列表，对每一个队列进行恢复
         for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
             for (ConsumeQueue logic : maps.values()) {
                 logic.recover();
@@ -1362,6 +1380,7 @@ public class DefaultMessageStore implements MessageStore {
 
     public void doDispatch(DispatchRequest req) {
         for (CommitLogDispatcher dispatcher : this.dispatcherList) {
+            System.out.println("dispatch index build request :" + dispatcher.getClass().getName()+ " " + JSONObject.toJSONString(req));
             dispatcher.dispatch(req);
         }
     }
@@ -1429,6 +1448,7 @@ public class DefaultMessageStore implements MessageStore {
         @Override
         public void dispatch(DispatchRequest request) {
             if (DefaultMessageStore.this.messageStoreConfig.isMessageIndexEnable()) {
+                System.out.println("build index : " + JSONObject.toJSONString(request));
                 DefaultMessageStore.this.indexService.buildIndex(request);
             }
         }
@@ -1703,6 +1723,9 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * ReputMessageService 构建索引触发构建索引。定时调度，读取commitLog文件内容来构建索引，写入索引文件
+     */
     class ReputMessageService extends ServiceThread {
 
         private volatile long reputFromOffset = 0;
@@ -1711,6 +1734,10 @@ public class DefaultMessageStore implements MessageStore {
             return reputFromOffset;
         }
 
+        /**
+         * 设置起始位置，broker启动时初始化。获取当前broker commitLog的最大有效偏移量（即：broker 文件写到了哪个位置）
+         * @param reputFromOffset
+         */
         public void setReputFromOffset(long reputFromOffset) {
             this.reputFromOffset = reputFromOffset;
         }
@@ -1747,21 +1774,24 @@ public class DefaultMessageStore implements MessageStore {
                     && this.reputFromOffset >= DefaultMessageStore.this.getConfirmOffset()) {
                     break;
                 }
-
+                //从commitLog读取从reputFromOffset 开始到commitLog 中已commitOffset 的数据
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
                         this.reputFromOffset = result.getStartOffset();
 
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
+                            //每次只处理一条消息。checkMessageAndReturnSize每次只读取一条消息
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
-                            int size = dispatchRequest.getMsgSize();
+                            //本次读取到的消息长度
+                            int size = dispatchRequest.getMsgSize();//消息长度
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
+                                    //触发构建索引、更新consumerQueue
                                     DefaultMessageStore.this.doDispatch(dispatchRequest);
-
+                                    //如果当前是master节点，并配置了长轮训，则通知有消息
                                     if (BrokerRole.SLAVE != DefaultMessageStore.this.getMessageStoreConfig().getBrokerRole()
                                         && DefaultMessageStore.this.brokerConfig.isLongPollingEnable()) {
                                         DefaultMessageStore.this.messageArrivingListener.arriving(dispatchRequest.getTopic(),
@@ -1779,7 +1809,7 @@ public class DefaultMessageStore implements MessageStore {
                                             .getSinglePutMessageTopicSizeTotal(dispatchRequest.getTopic())
                                             .addAndGet(dispatchRequest.getMsgSize());
                                     }
-                                } else if (size == 0) {
+                                } else if (size == 0) {//切换下一个文件
                                     this.reputFromOffset = DefaultMessageStore.this.commitLog.rollNextFile(this.reputFromOffset);
                                     readSize = result.getSize();
                                 }
@@ -1808,10 +1838,12 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        //线程入口
         @Override
         public void run() {
             DefaultMessageStore.log.info(this.getServiceName() + " service started");
 
+            //循环调doReput，线程sleep时间非常短，防止短期内写入大量数据，导致索引来不及构建，影响到数据的查询
             while (!this.isStopped()) {
                 try {
                     Thread.sleep(1);

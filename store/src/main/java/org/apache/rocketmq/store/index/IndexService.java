@@ -56,10 +56,10 @@ public class IndexService {
 
     public boolean load(final boolean lastExitOK) {
         File dir = new File(this.storePath);
-        File[] files = dir.listFiles();
+        File[] files = dir.listFiles();//获取索引文件
         if (files != null) {
             // ascending order
-            Arrays.sort(files);
+            Arrays.sort(files);//根据索引文件排序
             for (File file : files) {
                 try {
                     IndexFile f = new IndexFile(file.getPath(), this.hashSlotNum, this.indexNum, 0, 0);
@@ -198,6 +198,10 @@ public class IndexService {
         return topic + "#" + key;
     }
 
+    /**
+     * 创建索引
+     * @param req
+     */
     public void buildIndex(DispatchRequest req) {
         IndexFile indexFile = retryGetAndCreateIndexFile();
         if (indexFile != null) {

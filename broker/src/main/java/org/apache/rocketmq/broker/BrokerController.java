@@ -198,17 +198,21 @@ public class BrokerController {
     }
 
     public boolean initialize() throws CloneNotSupportedException {
-        boolean result = this.topicConfigManager.load();
+        boolean result = this.topicConfigManager.load();//从磁盘加载topic的相关信息，该topic信息来自nameServer
 
+        //加载消费组消费进度（消费进度由client直接发给broker，还是发给nameServer再下发给 broker ？）
         result = result && this.consumerOffsetManager.load();
+
+        //订阅组管理
         result = result && this.subscriptionGroupManager.load();
+        //
         result = result && this.consumerFilterManager.load();
 
         if (result) {
             try {
                 this.messageStore =
                     new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
-                        this.brokerConfig);
+                        this.brokerConfig);//存储文件处理，包括消息存储文件commitLog，索引文件IndexFile
                 this.brokerStats = new BrokerStats((DefaultMessageStore) this.messageStore);
                 //load plugin
                 MessageStorePluginContext context = new MessageStorePluginContext(messageStoreConfig, brokerStatsManager, messageArrivingListener, brokerConfig);
@@ -220,13 +224,17 @@ public class BrokerController {
             }
         }
 
-        result = result && this.messageStore.load();
+        //加载存储消息的commitLog(默认每个文件1G大小，顺序递增)
+        result = result && this.messageStore.load();//开始装载
 
-        if (result) {
+        if (result) {//broker数据初始化成功
             this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.clientHousekeepingService);
             NettyServerConfig fastConfig = (NettyServerConfig) this.nettyServerConfig.clone();
-            fastConfig.setListenPort(nettyServerConfig.getListenPort() - 2);
+            fastConfig.setListenPort(nettyServerConfig.getListenPort() - 2);//监听10909
             this.fastRemotingServer = new NettyRemotingServer(fastConfig, this.clientHousekeepingService);
+
+            //以下的各种Executor都是创建一个线程池，每个线程都为专门的业务服务，声明不同的线程池主要原因是为了各业务间
+            //的作业相互不会影响，防止有些业务的作业执行完，有些作业等不到执行。如sendMessageExecutor 用来处理broker接收到的消息请求
             this.sendMessageExecutor = new BrokerFixedThreadPoolExecutor(
                 this.brokerConfig.getSendMessageThreadPoolNums(),
                 this.brokerConfig.getSendMessageThreadPoolNums(),
@@ -267,10 +275,12 @@ public class BrokerController {
                 Executors.newFixedThreadPool(this.brokerConfig.getConsumerManageThreadPoolNums(), new ThreadFactoryImpl(
                     "ConsumerManageThread_"));
 
-            this.registerProcessor();
+            this.registerProcessor();//注册各种processor，处理不同的请求，根据请求的code 选择不同的processor处理请求
 
             final long initialDelay = UtilAll.computNextMorningTimeMillis() - System.currentTimeMillis();
             final long period = 1000 * 60 * 60 * 24;
+
+            //以下各种scheduledExecutorService 为一些任务提供定时调度，处理相关的业务
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
                 @Override
                 public void run() {
@@ -282,6 +292,9 @@ public class BrokerController {
                 }
             }, initialDelay, period, TimeUnit.MILLISECONDS);
 
+            /**
+             * 如下面的定时任务，处理用户消费组的消费进度记录刷盘工作，定时刷盘 10s调度处理一次
+             */
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
                 @Override
                 public void run() {
@@ -355,7 +368,7 @@ public class BrokerController {
                 }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
             }
 
-            if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
+            if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {//当前节点是slave节点
                 if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= 6) {
                     this.messageStore.updateHaMasterAddress(this.messageStoreConfig.getHaMasterAddress());
                     this.updateMasterHAServerAddrPeriodically = false;
@@ -368,13 +381,14 @@ public class BrokerController {
                     @Override
                     public void run() {
                         try {
+                            //定时从master节点同步数据
                             BrokerController.this.slaveSynchronize.syncAll();
                         } catch (Throwable e) {
                             log.error("ScheduledTask syncAll slave exception", e);
                         }
                     }
                 }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
-            } else {
+            } else {//节点为master，定期检查master和broker间的差异
                 this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
                     @Override
@@ -385,16 +399,17 @@ public class BrokerController {
                             log.error("schedule printMasterAndSlaveDiff error.", e);
                         }
                     }
+                    //1 min 检查一次
                 }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
             }
         }
 
-        return result;
+        return result;//至此，如果result 为true，broker启动成功
     }
 
-    public void registerProcessor() {
+    public void registerProcessor() {//注册各种processor，根据requestCode 选择processor处理请求
         /**
-         * SendMessageProcessor
+         * SendMessageProcessor 处理producer 消息请求，consumer消息回放请求，批量消息发送请求
          */
         SendMessageProcessor sendProcessor = new SendMessageProcessor(this);
         sendProcessor.registerSendMessageHook(sendMessageHookList);
@@ -404,6 +419,7 @@ public class BrokerController {
         this.remotingServer.registerProcessor(RequestCode.SEND_MESSAGE_V2, sendProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.SEND_BATCH_MESSAGE, sendProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.CONSUMER_SEND_MSG_BACK, sendProcessor, this.sendMessageExecutor);
+        //fastRemotingServer 用来做什么？
         this.fastRemotingServer.registerProcessor(RequestCode.SEND_MESSAGE, sendProcessor, this.sendMessageExecutor);
         this.fastRemotingServer.registerProcessor(RequestCode.SEND_MESSAGE_V2, sendProcessor, this.sendMessageExecutor);
         this.fastRemotingServer.registerProcessor(RequestCode.SEND_BATCH_MESSAGE, sendProcessor, this.sendMessageExecutor);
@@ -651,11 +667,11 @@ public class BrokerController {
 
     public void start() throws Exception {
         if (this.messageStore != null) {
-            this.messageStore.start();
+            this.messageStore.start();//数据存储初始化，包括down机重启的数据校验和整理
         }
 
         if (this.remotingServer != null) {
-            this.remotingServer.start();
+            this.remotingServer.start();//启动服务，监听请求
         }
 
         if (this.fastRemotingServer != null) {
@@ -678,10 +694,10 @@ public class BrokerController {
             this.filterServerManager.start();
         }
 
-        this.registerBrokerAll(true, false);
+        this.registerBrokerAll(true, false);//向nameServer集群注册当前broker
 
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
-
+            //启动定时调度服务，定期注册broker信息到nameServer集群，即保持当前broker在集群中活跃
             @Override
             public void run() {
                 try {
@@ -690,14 +706,14 @@ public class BrokerController {
                     log.error("registerBrokerAll Exception", e);
                 }
             }
-        }, 1000 * 10, 1000 * 30, TimeUnit.MILLISECONDS);
+        }, 1000 * 10, 1000 * 30, TimeUnit.MILLISECONDS);//延迟10s执行，每30s调度一次
 
         if (this.brokerStatsManager != null) {
-            this.brokerStatsManager.start();
+            this.brokerStatsManager.start();//broker 状态管理。何种状态？
         }
 
         if (this.brokerFastFailure != null) {
-            this.brokerFastFailure.start();
+            this.brokerFastFailure.start();// ？
         }
     }
 
@@ -716,6 +732,7 @@ public class BrokerController {
             topicConfigWrapper.setTopicConfigTable(topicConfigTable);
         }
 
+        //向nameServer注册broker,获取master节点信息(如果双主同步，注册能得到哪些信息？两台master是否会同步数据？待测试)
         RegisterBrokerResult registerBrokerResult = this.brokerOuterAPI.registerBrokerAll(
             this.brokerConfig.getBrokerClusterName(),
             this.getBrokerAddr(),
@@ -729,9 +746,10 @@ public class BrokerController {
 
         if (registerBrokerResult != null) {
             if (this.updateMasterHAServerAddrPeriodically && registerBrokerResult.getHaServerAddr() != null) {
+                //更新master节点信息，HAClient 需要用到master节点ip 同步数据
                 this.messageStore.updateHaMasterAddress(registerBrokerResult.getHaServerAddr());
             }
-
+            //slaveSynchronize 需要使用到masterIp信息同步队列信息，订阅信息等
             this.slaveSynchronize.setMasterAddr(registerBrokerResult.getMasterAddr());
 
             if (checkOrderConfig) {

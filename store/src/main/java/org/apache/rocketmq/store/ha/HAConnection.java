@@ -48,7 +48,7 @@ public class HAConnection {
         this.socketChannel.socket().setTcpNoDelay(true);
         this.socketChannel.socket().setReceiveBufferSize(1024 * 64);
         this.socketChannel.socket().setSendBufferSize(1024 * 64);
-        this.writeSocketService = new WriteSocketService(this.socketChannel);
+        this.writeSocketService = new WriteSocketService(this.socketChannel);//slave 的读写请求分开由不同的service处理
         this.readSocketService = new ReadSocketService(this.socketChannel);
         this.haService.getConnectionCount().incrementAndGet();
     }
@@ -78,12 +78,12 @@ public class HAConnection {
         return socketChannel;
     }
 
-    class ReadSocketService extends ServiceThread {
+    class ReadSocketService extends ServiceThread {//处理slave 数据同步的ack请求，更新当前更新master与slave的同步位置
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024;
         private final Selector selector;
         private final SocketChannel socketChannel;
         private final ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
-        private int processPostion = 0;
+        private int processPosition = 0;
         private volatile long lastReadTimestamp = System.currentTimeMillis();
 
         public ReadSocketService(final SocketChannel socketChannel) throws IOException {
@@ -150,7 +150,7 @@ public class HAConnection {
 
             if (!this.byteBufferRead.hasRemaining()) {
                 this.byteBufferRead.flip();
-                this.processPostion = 0;
+                this.processPosition = 0;
             }
 
             while (this.byteBufferRead.hasRemaining()) {
@@ -159,18 +159,19 @@ public class HAConnection {
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
                         this.lastReadTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();
-                        if ((this.byteBufferRead.position() - this.processPostion) >= 8) {
+                        if ((this.byteBufferRead.position() - this.processPosition) >= 8) {
                             int pos = this.byteBufferRead.position() - (this.byteBufferRead.position() % 8);
                             long readOffset = this.byteBufferRead.getLong(pos - 8);
-                            this.processPostion = pos;
+                            this.processPosition = pos;
 
-                            HAConnection.this.slaveAckOffset = readOffset;
+                            HAConnection.this.slaveAckOffset = readOffset;//读取slave需要同步的位置
                             if (HAConnection.this.slaveRequestOffset < 0) {
-                                HAConnection.this.slaveRequestOffset = readOffset;
+                                HAConnection.this.slaveRequestOffset = readOffset;//更新master同步位置，触发master数据同步
                                 log.info("slave[" + HAConnection.this.clientAddr + "] request offset " + readOffset);
                             }
 
                             HAConnection.this.haService.notifyTransferSome(HAConnection.this.slaveAckOffset);
+                            System.out.println("receive slave ack :" + slaveAckOffset);
                         }
                     } else if (readSize == 0) {
                         if (++readSizeZeroTimes >= 3) {
@@ -190,7 +191,7 @@ public class HAConnection {
         }
     }
 
-    class WriteSocketService extends ServiceThread {
+    class WriteSocketService extends ServiceThread {//将master数据发送给slave
         private final Selector selector;
         private final SocketChannel socketChannel;
 
@@ -216,13 +217,13 @@ public class HAConnection {
                 try {
                     this.selector.select(1000);
 
-                    if (-1 == HAConnection.this.slaveRequestOffset) {
+                    if (-1 == HAConnection.this.slaveRequestOffset) {//初始状态slaveRequestOffset =1，slave发起请求更新slaveRequestOffset=0
                         Thread.sleep(10);
                         continue;
                     }
 
-                    if (-1 == this.nextTransferFromWhere) {
-                        if (0 == HAConnection.this.slaveRequestOffset) {
+                    if (-1 == this.nextTransferFromWhere) {//nextTransferFromWhere = -1，即未同步过数据
+                        if (0 == HAConnection.this.slaveRequestOffset) {//首次同步，如slave首次加入集群
                             long masterOffset = HAConnection.this.haService.getDefaultMessageStore().getCommitLog().getMaxOffset();
                             masterOffset =
                                 masterOffset
@@ -234,11 +235,13 @@ public class HAConnection {
                             }
 
                             this.nextTransferFromWhere = masterOffset;
-                        } else {
+                        } else {//非首次同步，如master 重启，slave发起数据同步
                             this.nextTransferFromWhere = HAConnection.this.slaveRequestOffset;
                         }
 
-                        log.info("master transfer data from " + this.nextTransferFromWhere + " to slave[" + HAConnection.this.clientAddr
+//                        log.info("master transfer data from " + this.nextTransferFromWhere + " to slave[" + HAConnection.this.clientAddr
+//                            + "], and slave request " + HAConnection.this.slaveRequestOffset);
+                        System.out.println("master transfer data from " + this.nextTransferFromWhere + " to slave[" + HAConnection.this.clientAddr
                             + "], and slave request " + HAConnection.this.slaveRequestOffset);
                     }
 
@@ -351,6 +354,7 @@ public class HAConnection {
             // Write Body
             if (!this.byteBufferHeader.hasRemaining()) {
                 while (this.selectMappedBufferResult.getByteBuffer().hasRemaining()) {
+                    //将commitLog数据发送给slave
                     int writeSize = this.socketChannel.write(this.selectMappedBufferResult.getByteBuffer());
                     if (writeSize > 0) {
                         writeSizeZeroTimes = 0;

@@ -154,10 +154,11 @@ public class MappedFile extends ReferenceResource {
         this.fileName = fileName;
         this.fileSize = fileSize;
         this.file = new File(fileName);
+        //从文件名中获取到当前存储的偏移量。每个文件均以该文件起始的偏移量作为文件名称，长度不足补0，如:00000000000000000000
         this.fileFromOffset = Long.parseLong(this.file.getName());
         boolean ok = false;
 
-        ensureDirOK(this.file.getParent());
+        ensureDirOK(this.file.getParent());//确保当前文件的路径存在
 
         try {
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
@@ -190,10 +191,22 @@ public class MappedFile extends ReferenceResource {
         return fileChannel;
     }
 
+    /**
+     * 将接收到的消息追加到文件末尾
+     * @param msg
+     * @param cb
+     * @return
+     */
     public AppendMessageResult appendMessage(final MessageExtBrokerInner msg, final AppendMessageCallback cb) {
         return appendMessagesInner(msg, cb);
     }
 
+    /**
+     * 批量追加
+     * @param messageExtBatch
+     * @param cb
+     * @return
+     */
     public AppendMessageResult appendMessages(final MessageExtBatch messageExtBatch, final AppendMessageCallback cb) {
         return appendMessagesInner(messageExtBatch, cb);
     }
@@ -202,21 +215,25 @@ public class MappedFile extends ReferenceResource {
         assert messageExt != null;
         assert cb != null;
 
+        //获取当前文件的写入位置
         int currentPos = this.wrotePosition.get();
 
-        if (currentPos < this.fileSize) {
+        if (currentPos < this.fileSize) {//当前文件写入位置小于文件大小，即文件没有写满
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
-            byteBuffer.position(currentPos);
+            byteBuffer.position(currentPos);//设置byteBuffer写入位置，即当前文件磁盘的写入位置
             AppendMessageResult result = null;
-            if (messageExt instanceof MessageExtBrokerInner) {
-                result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBrokerInner) messageExt);
-            } else if (messageExt instanceof MessageExtBatch) {
+            if (messageExt instanceof MessageExtBrokerInner) {//单条消息写入
+                result = cb.doAppend(this.getFileFromOffset(),
+                        byteBuffer,//当前commitLog 引用
+                        this.fileSize - currentPos,//当前commitLog剩余空间
+                        (MessageExtBrokerInner) messageExt);//待处理消息
+            } else if (messageExt instanceof MessageExtBatch) {//批量写入
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBatch) messageExt);
             } else {
                 return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
             }
-            this.wrotePosition.addAndGet(result.getWroteBytes());
-            this.storeTimestamp = result.getStoreTimestamp();
+            this.wrotePosition.addAndGet(result.getWroteBytes());//写入消息后，更新写入位置
+            this.storeTimestamp = result.getStoreTimestamp();//获取本次写入消息消耗的时间
             return result;
         }
         log.error("MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}", currentPos, this.fileSize);

@@ -40,7 +40,7 @@ public class IndexFile {
     private final IndexHeader indexHeader;
 
     public IndexFile(final String fileName, final int hashSlotNum, final int indexNum,
-        final long endPhyOffset, final long endTimestamp) throws IOException {
+        final long endPhyOffset, final long endTimestamp) throws IOException {//具体索引文件结构需要参考官方文档的存储结构
         int fileTotalSize =
             IndexHeader.INDEX_HEADER_SIZE + (hashSlotNum * hashSlotSize) + (indexNum * indexSize);
         this.mappedFile = new MappedFile(fileName, fileTotalSize);
@@ -89,10 +89,19 @@ public class IndexFile {
         return this.mappedFile.destroy(intervalForcibly);
     }
 
+    /**
+     *
+     * @param key 当前消息的唯一标识
+     * @param phyOffset 消息在commitLog中的物理位置
+     * @param storeTimestamp 消息保存的时间
+     * @return
+     */
     public boolean putKey(final String key, final long phyOffset, final long storeTimestamp) {
         if (this.indexHeader.getIndexCount() < this.indexNum) {
-            int keyHash = indexKeyHashMethod(key);
+            int keyHash = indexKeyHashMethod(key);//计算索引key的哈市值
+            //hashSlotNum 为一个索引文件包含的索引数量，取余即获取当前key在索引文件的hash槽，类似数组的中的index
             int slotPos = keyHash % this.hashSlotNum;
+            //计算在索引文件的偏移量
             int absSlotPos = IndexHeader.INDEX_HEADER_SIZE + slotPos * hashSlotSize;
 
             FileLock fileLock = null;
@@ -101,10 +110,11 @@ public class IndexFile {
 
                 // fileLock = this.fileChannel.lock(absSlotPos, hashSlotSize,
                 // false);
-                int slotValue = this.mappedByteBuffer.getInt(absSlotPos);
+                int slotValue = this.mappedByteBuffer.getInt(absSlotPos);//获取该索引位置是否合法
                 if (slotValue <= invalidIndex || slotValue > this.indexHeader.getIndexCount()) {
                     slotValue = invalidIndex;
                 }
+
 
                 long timeDiff = storeTimestamp - this.indexHeader.getBeginTimestamp();
 
@@ -117,10 +127,11 @@ public class IndexFile {
                 } else if (timeDiff < 0) {
                     timeDiff = 0;
                 }
-
+                //获取当前消息在index文件的存储位置
                 int absIndexPos =
                     IndexHeader.INDEX_HEADER_SIZE + this.hashSlotNum * hashSlotSize
                         + this.indexHeader.getIndexCount() * indexSize;
+
 
                 this.mappedByteBuffer.putInt(absIndexPos, keyHash);
                 this.mappedByteBuffer.putLong(absIndexPos + 4, phyOffset);
@@ -134,10 +145,10 @@ public class IndexFile {
                     this.indexHeader.setBeginTimestamp(storeTimestamp);
                 }
 
-                this.indexHeader.incHashSlotCount();
-                this.indexHeader.incIndexCount();
+                this.indexHeader.incHashSlotCount();//修改hash槽个数
+                this.indexHeader.incIndexCount();//修改index文件的保存的索引数
                 this.indexHeader.setEndPhyOffset(phyOffset);
-                this.indexHeader.setEndTimestamp(storeTimestamp);
+                this.indexHeader.setEndTimestamp(storeTimestamp);//修改index文件最后一次保存时间
 
                 return true;
             } catch (Exception e) {

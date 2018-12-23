@@ -53,7 +53,7 @@ public class BrokerStartup {
     public static Logger log;
 
     public static void main(String[] args) {
-        start(createBrokerController(args));
+        start(createBrokerController(args));//broker 启动入口
     }
 
     public static BrokerController start(BrokerController controller) {
@@ -112,7 +112,7 @@ public class BrokerStartup {
                 messageStoreConfig.setAccessMessageInMemoryMaxRatio(ratio);
             }
 
-            if (commandLine.hasOption('c')) {
+            if (commandLine.hasOption('c')) {//配置文件处理
                 String file = commandLine.getOptionValue('c');
                 if (file != null) {
                     configFile = file;
@@ -154,13 +154,13 @@ public class BrokerStartup {
                 }
             }
 
-            switch (messageStoreConfig.getBrokerRole()) {
-                case ASYNC_MASTER:
-                case SYNC_MASTER:
-                    brokerConfig.setBrokerId(MixAll.MASTER_ID);
+            switch (messageStoreConfig.getBrokerRole()) {//当前broker节点角色
+                case ASYNC_MASTER://同步master，即发送收到producer的消息时，需要同步发送给该master下slave节点
+                case SYNC_MASTER://异步master,非实时发送
+                    brokerConfig.setBrokerId(MixAll.MASTER_ID);//master id 必须是0，id用于在集群中做唯一标识
                     break;
-                case SLAVE:
-                    if (brokerConfig.getBrokerId() <= 0) {
+                case SLAVE://slave
+                    if (brokerConfig.getBrokerId() <= 0) { //brokerId 不能小于0
                         System.out.printf("Slave's brokerId must be > 0");
                         System.exit(-3);
                     }
@@ -170,7 +170,7 @@ public class BrokerStartup {
                     break;
             }
 
-            messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);
+            messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);//高可用端口
             LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
             JoranConfigurator configurator = new JoranConfigurator();
             configurator.setContext(lc);
@@ -203,17 +203,17 @@ public class BrokerStartup {
                 brokerConfig,
                 nettyServerConfig,
                 nettyClientConfig,
-                messageStoreConfig);
+                messageStoreConfig);//创建broker实例
             // remember all configs to prevent discard
             controller.getConfiguration().registerConfig(properties);
 
-            boolean initResult = controller.initialize();
-            if (!initResult) {
+            boolean initResult = controller.initialize();//broker 初始化
+            if (!initResult) {//broker启动失败
                 controller.shutdown();
                 System.exit(-3);
             }
 
-            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {//添加钩子，jvm退出时，做响应的关闭操作
                 private volatile boolean hasShutdown = false;
                 private AtomicInteger shutdownTimes = new AtomicInteger(0);
 

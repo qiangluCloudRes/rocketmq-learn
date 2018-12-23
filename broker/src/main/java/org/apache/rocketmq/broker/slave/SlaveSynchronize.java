@@ -46,10 +46,10 @@ public class SlaveSynchronize {
     }
 
     public void syncAll() {
-        this.syncTopicConfig();
-        this.syncConsumerOffset();
+        this.syncTopicConfig();//同步topic配置
+        this.syncConsumerOffset();//同步消费组进度
         this.syncDelayOffset();
-        this.syncSubscriptionGroupConfig();
+        this.syncSubscriptionGroupConfig();//同步订阅组
     }
 
     private void syncTopicConfig() {
@@ -59,7 +59,7 @@ public class SlaveSynchronize {
                 TopicConfigSerializeWrapper topicWrapper =
                     this.brokerController.getBrokerOuterAPI().getAllTopicConfig(masterAddrBak);
                 if (!this.brokerController.getTopicConfigManager().getDataVersion()
-                    .equals(topicWrapper.getDataVersion())) {
+                    .equals(topicWrapper.getDataVersion())) {//从master得到的topic信息与本地的版本不同，更新本地topic的配置信息
 
                     this.brokerController.getTopicConfigManager().getDataVersion()
                         .assignNewOne(topicWrapper.getDataVersion());
@@ -80,10 +80,13 @@ public class SlaveSynchronize {
         String masterAddrBak = this.masterAddr;
         if (masterAddrBak != null) {
             try {
+                //从master获取消费者的消费进度
                 ConsumerOffsetSerializeWrapper offsetWrapper =
                     this.brokerController.getBrokerOuterAPI().getAllConsumerOffset(masterAddrBak);
+                //代替本地记录的的消费进度
                 this.brokerController.getConsumerOffsetManager().getOffsetTable()
                     .putAll(offsetWrapper.getOffsetTable());
+                //持久化到磁盘
                 this.brokerController.getConsumerOffsetManager().persist();
                 log.info("Update slave consumer offset from master, {}", masterAddrBak);
             } catch (Exception e) {
@@ -120,12 +123,14 @@ public class SlaveSynchronize {
         String masterAddrBak = this.masterAddr;
         if (masterAddrBak != null) {
             try {
+                //从master获取订阅组的信息
                 SubscriptionGroupWrapper subscriptionWrapper =
                     this.brokerController.getBrokerOuterAPI()
                         .getAllSubscriptionGroupConfig(masterAddrBak);
 
                 if (!this.brokerController.getSubscriptionGroupManager().getDataVersion()
                     .equals(subscriptionWrapper.getDataVersion())) {
+                    //当前broker节点的数据版本与master不同，用master的数据替换本地的数据
                     SubscriptionGroupManager subscriptionGroupManager =
                         this.brokerController.getSubscriptionGroupManager();
                     subscriptionGroupManager.getDataVersion().assignNewOne(
