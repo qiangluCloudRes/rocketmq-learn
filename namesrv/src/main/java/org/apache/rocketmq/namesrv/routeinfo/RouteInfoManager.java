@@ -112,22 +112,24 @@ public class RouteInfoManager {
         try {
             try {
                 this.lock.writeLock().lockInterruptibly();
-
+                //根据集群名称获取该集群中的broker名称列表
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
-                if (null == brokerNames) {
+                if (null == brokerNames) {//集群首次注册
                     brokerNames = new HashSet<String>();
                     this.clusterAddrTable.put(clusterName, brokerNames);
                 }
+                //当前broker名称加入集群
                 brokerNames.add(brokerName);
 
                 boolean registerFirst = false;
-
+                //根据broker名称获取broker信息
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
-                if (null == brokerData) {
+                if (null == brokerData) {//broker首次注册
                     registerFirst = true;
                     brokerData = new BrokerData(clusterName, brokerName, new HashMap<Long, String>());
                     this.brokerAddrTable.put(brokerName, brokerData);
                 }
+                //更新brokerName 对应的broker信息
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
@@ -144,7 +146,7 @@ public class RouteInfoManager {
                         }
                     }
                 }
-
+                //更新活跃broker信息
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -162,7 +164,19 @@ public class RouteInfoManager {
                         this.filterServerTable.put(brokerAddr, filterServerList);
                     }
                 }
-
+                /**
+                 * 如果不是master节点(即broker节点)，获取broker需要同步的master ip地址
+                 * 在RocketMq中，master和slave 的brokerName必须相同
+                 * 比如2M2S 部署模式中：
+                 * master one：brokerClusterName=DefaultCluster  brokerName=broker-a  brokerId=0
+                 * master two：brokerClusterName=DefaultCluster  brokerName=broker-b  brokerId=0
+                 * slave  one：brokerClusterName=DefaultCluster  brokerName=broker-a  brokerId=1
+                 * slave two：brokerClusterName=DefaultCluster  brokerName=broker-b  brokerId=1
+                 * salve one 将会同步  master one 节点的数据
+                 * salve two 将会同步  master two 节点的数据
+                 * 如果差找不到master节点则不会同步不数据
+                 * 两个master 的 brokerName 必须不一样
+                 */
                 if (MixAll.MASTER_ID != brokerId) {
                     String masterAddr = brokerData.getBrokerAddrs().get(MixAll.MASTER_ID);
                     if (masterAddr != null) {
