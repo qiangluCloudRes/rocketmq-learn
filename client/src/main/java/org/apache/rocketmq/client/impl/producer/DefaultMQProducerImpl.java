@@ -423,6 +423,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    /**
+     * 根据算法选择队列
+     * @param tpInfo
+     * @param lastBrokerName
+     * @return
+     */
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
         return this.mqFaultStrategy.selectOneMessageQueue(tpInfo, lastBrokerName);
     }
@@ -444,8 +450,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         long beginTimestampFirst = System.currentTimeMillis();
         long beginTimestampPrev = beginTimestampFirst;
         long endTimestamp = beginTimestampFirst;
+        //尝试获取topic信息
         TopicPublishInfo topicPublishInfo = this.tryToFindTopicPublishInfo(msg.getTopic());
-        if (topicPublishInfo != null && topicPublishInfo.ok()) {
+        if (topicPublishInfo != null && topicPublishInfo.ok()) {//正常查询到topic信息(或者默认topic TBW102)
+            //发送消息时，使用msg指定的topic 名称发送消息。当查询到指定的broker信息时，使用已查到的topic信息为准发送消息。
+            // 当topic未被创建，查到的是默认broker的信息时，这时选择队列的时候用默认的topic信息(默认topic的配置和普通topic相同，
+            // 因为此时在name server 查询不到指定topic的信息，所以默认topic，使用默认topic的信息分配队列)
             MessageQueue mq = null;
             Exception exception = null;
             SendResult sendResult = null;
@@ -453,6 +463,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             int timesTotal = communicationMode == CommunicationMode.SYNC ? 1 : 1;
             int times = 0;
             String[] brokersSent = new String[timesTotal];
+            //循环尝试发送。默认3次
             for (; times < timesTotal; times++) {
                 String lastBrokerName = null == mq ? null : mq.getBrokerName();
                 MessageQueue mqSelected = this.selectOneMessageQueue(topicPublishInfo, lastBrokerName);
@@ -555,28 +566,34 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
             throw mqClientException;
         }
-
+        //查询不到topic信息，获取name server 集群，判断是否是因为无法访问name server 而导致无法获取到topic的路由信息
         List<String> nsList = this.getmQClientFactory().getMQClientAPIImpl().getNameServerAddressList();
         if (null == nsList || nsList.isEmpty()) {
             throw new MQClientException(
                 "No name server address, please set it." + FAQUrl.suggestTodo(FAQUrl.NAME_SERVER_ADDR_NOT_EXIST_URL), null).setResponseCode(ClientErrorCode.NO_NAME_SERVER_EXCEPTION);
         }
-
+        //无法查询到topic信息，抛出异常
         throw new MQClientException("No route info of this topic, " + msg.getTopic() + FAQUrl.suggestTodo(FAQUrl.NO_TOPIC_ROUTE_INFO),
             null).setResponseCode(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION);
     }
 
     private TopicPublishInfo tryToFindTopicPublishInfo(final String topic) {
+        //从本地topic 列表查询 topic信息
         TopicPublishInfo topicPublishInfo = this.topicPublishInfoTable.get(topic);
         if (null == topicPublishInfo || !topicPublishInfo.ok()) {
+            //本地不存在 或者 无效
             this.topicPublishInfoTable.putIfAbsent(topic, new TopicPublishInfo());
+            //尝试从nameServer 读取
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(topic);
+            //如果获取指定的topic信息获取不到，则获取默认topic（TBW102）
             topicPublishInfo = this.topicPublishInfoTable.get(topic);
         }
 
         if (topicPublishInfo.isHaveTopicRouterInfo() || topicPublishInfo.ok()) {
+            //正常从name server获取到了topic信息
             return topicPublishInfo;
         } else {
+            //获取默认topic信息
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(topic, true, this.defaultMQProducer);
             topicPublishInfo = this.topicPublishInfoTable.get(topic);
             return topicPublishInfo;
@@ -650,6 +667,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
                 SendMessageRequestHeader requestHeader = new SendMessageRequestHeader();
                 requestHeader.setProducerGroup(this.defaultMQProducer.getProducerGroup());
+                //以msg 指定的topic为准（因为首次发送消息的时候，在name server 查不到指定topic的信息,查到的是默认topic的信息）
                 requestHeader.setTopic(msg.getTopic());
                 requestHeader.setDefaultTopic(this.defaultMQProducer.getCreateTopicKey());
                 requestHeader.setDefaultTopicQueueNums(this.defaultMQProducer.getDefaultTopicQueueNums());
@@ -1017,7 +1035,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     /**
-     * DEFAULT SYNC -------------------------------------------------------
+     * 默认同步发送
      */
     public SendResult send(
         Message msg) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {

@@ -1197,33 +1197,45 @@ public class MQClientAPIImpl {
         return getTopicRouteInfoFromNameServer(topic, timeoutMillis, true);
     }
 
+    /**
+     * 访问name server 拉取topic信息，
+     * @param topic  查询的topic名称
+     * @param timeoutMillis 等待时间
+     * @param allowTopicNotExist 是否允许topic不存在（不存在可选择创建）
+     * @return
+     * @throws MQClientException
+     * @throws InterruptedException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     * @throws RemotingConnectException
+     */
     public TopicRouteData getTopicRouteInfoFromNameServer(final String topic, final long timeoutMillis,
         boolean allowTopicNotExist) throws MQClientException, InterruptedException, RemotingTimeoutException, RemotingSendRequestException, RemotingConnectException {
         GetRouteInfoRequestHeader requestHeader = new GetRouteInfoRequestHeader();
         requestHeader.setTopic(topic);
-
+        //从nameServer 查询top 信息
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.GET_ROUTEINTO_BY_TOPIC, requestHeader);
 
         RemotingCommand response = this.remotingClient.invokeSync(null, request, timeoutMillis);
         assert response != null;
         switch (response.getCode()) {
-            case ResponseCode.TOPIC_NOT_EXIST: {
+            case ResponseCode.TOPIC_NOT_EXIST: {//topic不存在
                 if (allowTopicNotExist && !topic.equals(MixAll.DEFAULT_TOPIC)) {
                     log.warn("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
                 }
 
                 break;
             }
-            case ResponseCode.SUCCESS: {
+            case ResponseCode.SUCCESS: {//查询到topic信息，即其他节点已经创建了topic
                 byte[] body = response.getBody();
-                if (body != null) {
+                if (body != null) {//decode topic 信息并返回
                     return TopicRouteData.decode(body, TopicRouteData.class);
                 }
             }
             default:
                 break;
         }
-
+        //查询不到则抛出异常
         throw new MQClientException(response.getCode(), response.getRemark());
     }
 

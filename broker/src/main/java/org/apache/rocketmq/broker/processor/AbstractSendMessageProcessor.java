@@ -186,7 +186,7 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
         //从当前节点获取topic信息
         TopicConfig topicConfig =
             this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
-        if (null == topicConfig) {
+        if (null == topicConfig) {//当前broker未接受过此topic的消息，所以查询不到topic的信息
             int topicSysFlag = 0;
             if (requestHeader.isUnitMode()) {
                 //判断是否是retry topic

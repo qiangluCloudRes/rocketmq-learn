@@ -694,10 +694,12 @@ public class BrokerController {
             this.filterServerManager.start();
         }
 
-        this.registerBrokerAll(true, false);//向nameServer集群注册当前broker
+        //启动时向nameServer集群注册当前broker（包括topic 、queue等信息，如默认topic等信息会在启动的时候注册）
+        this.registerBrokerAll(true, false);
 
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
-            //启动定时调度服务，定期注册broker信息到nameServer集群，即保持当前broker在集群中活跃
+            //启动定时调度服务，定期注册broker信息到nameServer集群，即保持当前broker在集群中活跃，
+            // 并更新当前broker的数据到name server
             @Override
             public void run() {
                 try {
@@ -718,6 +720,7 @@ public class BrokerController {
     }
 
     public synchronized void registerBrokerAll(final boolean checkOrderConfig, boolean oneway) {
+        //获取当前broker的topic信息、包括topic信息如是否允许自动创建topic等
         TopicConfigSerializeWrapper topicConfigWrapper = this.getTopicConfigManager().buildTopicConfigSerializeWrapper();
 
         if (!PermName.isWriteable(this.getBrokerConfig().getBrokerPermission())
@@ -725,14 +728,17 @@ public class BrokerController {
             ConcurrentHashMap<String, TopicConfig> topicConfigTable = new ConcurrentHashMap<String, TopicConfig>();
             for (TopicConfig topicConfig : topicConfigWrapper.getTopicConfigTable().values()) {
                 TopicConfig tmp =
-                    new TopicConfig(topicConfig.getTopicName(), topicConfig.getReadQueueNums(), topicConfig.getWriteQueueNums(),
-                        this.brokerConfig.getBrokerPermission());
+                    new TopicConfig(topicConfig.getTopicName(), //topic 名称
+                            topicConfig.getReadQueueNums(), // 当前topic可以读取队列
+                            topicConfig.getWriteQueueNums(),//当前topic可写队列
+                        this.brokerConfig.getBrokerPermission());//当前broker的权限
                 topicConfigTable.put(topicConfig.getTopicName(), tmp);
             }
             topicConfigWrapper.setTopicConfigTable(topicConfigTable);
         }
 
-        //向nameServer注册broker,获取master节点信息(如果双主同步，注册能得到哪些信息？两台master是否会同步数据？待测试)
+        //向nameServer注册broker,如果当前broker节点是slave，则会得到master节点信息，进行主从同步。
+        // 如果是master 则HAserver 和 master是null. ps:master 之间不会存在交互
         RegisterBrokerResult registerBrokerResult = this.brokerOuterAPI.registerBrokerAll(
             this.brokerConfig.getBrokerClusterName(),
             this.getBrokerAddr(),
