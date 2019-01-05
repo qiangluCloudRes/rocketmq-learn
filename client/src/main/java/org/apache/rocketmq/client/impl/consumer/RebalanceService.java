@@ -32,6 +32,10 @@ public class RebalanceService extends ServiceThread {
         this.mqClientFactory = mqClientFactory;
     }
 
+    /**
+     * 负责消费队列的均衡消费。如消费组有其他的消费者加入，则重新均衡队列的消费。
+     * 一开始 Q1、Q2、Q3、Q4  都由consumer1消费，当有新的消费者consumer2加如后，consumer1会停止消费Q3、Q4，让consumer2消费
+     */
     @Override
     public void run() {
         log.info(this.getServiceName() + " service started");

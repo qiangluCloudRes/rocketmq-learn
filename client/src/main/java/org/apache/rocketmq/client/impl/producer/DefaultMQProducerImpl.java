@@ -455,7 +455,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         if (topicPublishInfo != null && topicPublishInfo.ok()) {//正常查询到topic信息(或者默认topic TBW102)
             //发送消息时，使用msg指定的topic 名称发送消息。当查询到指定的broker信息时，使用已查到的topic信息为准发送消息。
             // 当topic未被创建，查到的是默认broker的信息时，这时选择队列的时候用默认的topic信息(默认topic的配置和普通topic相同，
-            // 因为此时在name server 查询不到指定topic的信息，所以默认topic，使用默认topic的信息分配队列)
+            // 因为此时在name server 查询不到指定topic的信息，所以使用默认topic的信息分配队列)
             MessageQueue mq = null;
             Exception exception = null;
             SendResult sendResult = null;

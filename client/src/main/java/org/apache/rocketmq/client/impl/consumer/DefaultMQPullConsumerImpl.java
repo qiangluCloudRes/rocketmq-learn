@@ -322,6 +322,11 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
         }
     }
 
+    /**
+     * 更新topic信息，均衡队列消费时使用
+     * @param topic
+     * @param info
+     */
     @Override
     public void updateTopicSubscribeInfo(String topic, Set<MessageQueue> info) {
         Map<String, SubscriptionData> subTable = this.rebalanceImpl.getSubscriptionInner();

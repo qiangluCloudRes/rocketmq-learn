@@ -236,7 +236,7 @@ public class MQClientInstance {
                     this.startScheduledTask();
                     // Start pull service
                     this.pullMessageService.start();
-                    // Start rebalance service
+                    // Start rebalance service 负责到broker拉取数据，有新的消费组加入，均衡队列消费
                     this.rebalanceService.start();
                     // Start push service
                     this.defaultMQProducer.getDefaultMQProducerImpl().start(false);
@@ -585,6 +585,13 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 从name server 或topic 信息
+     * @param topic
+     * @param isDefault
+     * @param defaultMQProducer
+     * @return
+     */
     public boolean updateTopicRouteInfoFromNameServer(final String topic, boolean isDefault,
         DefaultMQProducer defaultMQProducer) {
         try {
@@ -949,6 +956,7 @@ public class MQClientInstance {
         this.rebalanceService.wakeup();
     }
 
+    //遍历当前消费组，拉取消息
     public void doRebalance() {
         for (Map.Entry<String, MQConsumerInner> entry : this.consumerTable.entrySet()) {
             MQConsumerInner impl = entry.getValue();

@@ -57,7 +57,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
 
     @Override
     public void updateOffset(MessageQueue mq, long offset, boolean increaseOnly) {
-        if (mq != null) {
+        if (mq != null) {//更新本地的消费进度
             AtomicLong offsetOld = this.offsetTable.get(mq);
             if (null == offsetOld) {
                 offsetOld = this.offsetTable.putIfAbsent(mq, new AtomicLong(offset));
@@ -78,7 +78,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
         if (mq != null) {
             switch (type) {
                 case MEMORY_FIRST_THEN_STORE:
-                case READ_FROM_MEMORY: {
+                case READ_FROM_MEMORY: {//从本地读取消费进度
                     AtomicLong offset = this.offsetTable.get(mq);
                     if (offset != null) {
                         return offset.get();
@@ -86,10 +86,12 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
                         return -1;
                     }
                 }
-                case READ_FROM_STORE: {
+                case READ_FROM_STORE: {//从broker读取最新的消费进度
                     try {
+                        //每次请求数据前，先从broker 获取到消费进度
                         long brokerOffset = this.fetchConsumeOffsetFromBroker(mq);
                         AtomicLong offset = new AtomicLong(brokerOffset);
+                        //更新本地的消费进度信息
                         this.updateOffset(mq, offset.get(), false);
                         return brokerOffset;
                     }
@@ -111,6 +113,10 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
         return -1;
     }
 
+    /**
+     * 消费进度持久化，将消费进度同步到broker保存。当消费者下线或者消费者切换时，可以查询到正确的消费进度
+     * @param mqs
+     */
     @Override
     public void persistAll(Set<MessageQueue> mqs) {
         if (null == mqs || mqs.isEmpty())
@@ -124,6 +130,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
                 if (offset != null) {
                     if (mqs.contains(mq)) {
                         try {
+                            //将消费进度同步到broker
                             this.updateConsumeOffsetToBroker(mq, offset.get());
                             log.info("[persistAll] Group: {} ClientId: {} updateConsumeOffsetToBroker {} {}",
                                 this.groupName,
@@ -164,6 +171,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
             }
         }
     }
+
 
     public void removeOffset(MessageQueue mq) {
         if (mq != null) {

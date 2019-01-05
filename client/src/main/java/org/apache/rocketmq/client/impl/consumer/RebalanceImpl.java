@@ -216,6 +216,10 @@ public abstract class RebalanceImpl {
         }
     }
 
+    /**
+     *
+     * @param isOrder 根据topic 做队列消费的负载均衡
+     */
     public void doRebalance(final boolean isOrder) {
         Map<String, SubscriptionData> subTable = this.getSubscriptionInner();
         if (subTable != null) {
@@ -238,6 +242,11 @@ public abstract class RebalanceImpl {
         return subscriptionInner;
     }
 
+    /**
+     * 构建请求，队列均衡实现逻辑
+     * @param topic
+     * @param isOrder
+     */
     private void rebalanceByTopic(final String topic, final boolean isOrder) {
         switch (messageModel) {
             case BROADCASTING: {
@@ -258,7 +267,9 @@ public abstract class RebalanceImpl {
                 break;
             }
             case CLUSTERING: {
+                //根据topic获取队列信息(topicSubscribeInfoTable 启动及定期name server获取)
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+                //从name server 加载当前topic的消费者数量
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
                 if (null == mqSet) {
                     if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -281,6 +292,7 @@ public abstract class RebalanceImpl {
 
                     List<MessageQueue> allocateResult = null;
                     try {
+                        //根据均衡算法选择当前client 可以消费哪个队列的消息
                         allocateResult = strategy.allocate(
                             this.consumerGroup,
                             this.mQClientFactory.getClientId(),
@@ -296,7 +308,7 @@ public abstract class RebalanceImpl {
                     if (allocateResult != null) {
                         allocateResultSet.addAll(allocateResult);
                     }
-
+                    //从新均衡，更新请求
                     boolean changed = this.updateProcessQueueTableInRebalance(topic, allocateResultSet, isOrder);
                     if (changed) {
                         log.info(
@@ -376,8 +388,9 @@ public abstract class RebalanceImpl {
 
                 this.removeDirtyOffset(mq);
                 ProcessQueue pq = new ProcessQueue();
+                //获取队列拉取起始偏移量，每次从broker获取最新的offset
                 long nextOffset = this.computePullFromWhere(mq);
-                if (nextOffset >= 0) {
+                if (nextOffset >= 0) {//创建请求
                     ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
                     if (pre != null) {
                         log.info("doRebalance, {}, mq already exists, {}", consumerGroup, mq);

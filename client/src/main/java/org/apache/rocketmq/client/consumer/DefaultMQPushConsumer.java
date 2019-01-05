@@ -59,6 +59,10 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     /**
      * Internal implementation. Most of the functions herein are delegated to it.
      */
+
+    /**
+     * 不需要client 主动拉取，server将消息push给consumer（实际实现还是client定时轮训broker拉取消息，做了封装，对consumer不可见而已）
+     */
     protected final transient DefaultMQPushConsumerImpl defaultMQPushConsumerImpl;
 
     /**
@@ -510,7 +514,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
         return this.defaultMQPushConsumerImpl.fetchSubscribeMessageQueues(topic);
     }
 
-    /**
+    /** 启动consumer，监听broker的消息,如果收到消息就处理
      * This method gets internal infrastructure readily to serve. Instances must call this method after configuration.
      *
      * @throws MQClientException if there is any client error.
