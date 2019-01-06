@@ -51,6 +51,7 @@ public class QueryMessageProcessor implements NettyRequestProcessor {
     public RemotingCommand processRequest(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
         switch (request.getCode()) {
+            //读取消息
             case RequestCode.QUERY_MESSAGE:
                 return this.queryMessage(ctx, request);
             case RequestCode.VIEW_MESSAGE_BY_ID:

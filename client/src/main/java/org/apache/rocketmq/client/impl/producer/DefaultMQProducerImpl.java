@@ -472,6 +472,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     brokersSent[times] = mq.getBrokerName();
                     try {
                         beginTimestampPrev = System.currentTimeMillis();
+                        //topicPublishInfo 信息中包含了broker节点的信息,broker 交互规则查看sendKernelImpl说明
                         sendResult = this.sendKernelImpl(msg, mq, communicationMode, sendCallback, topicPublishInfo, timeout);
                         endTimestamp = System.currentTimeMillis();
                         this.updateFaultItem(mq.getBrokerName(), endTimestamp - beginTimestampPrev, false);
@@ -606,6 +607,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         final SendCallback sendCallback,
         final TopicPublishInfo topicPublishInfo,
         final long timeout) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        //根据队列信息中的brokerName查找broker master的ip地址。因为slave不能写入
+        /**
+         * 在producer第一次发送数据时选择了broker之后，后续所有的数据发送都会发送到该broker，除非两个master节点使用相同的
+         * 的brokerName，即双主模式，producer才可能中途将数据发送到其他broker，否则producer中途不会切换broker。但是如果采用
+         * 双主模式，此时这两个节点无法配置slave，因为slave也是根据brokerName来查找master节点然后同步数据
+         */
         String brokerAddr = this.mQClientFactory.findBrokerAddressInPublish(mq.getBrokerName());
         if (null == brokerAddr) {
             tryToFindTopicPublishInfo(mq.getTopic());

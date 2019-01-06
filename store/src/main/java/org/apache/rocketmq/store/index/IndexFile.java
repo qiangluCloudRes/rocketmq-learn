@@ -98,7 +98,7 @@ public class IndexFile {
      */
     public boolean putKey(final String key, final long phyOffset, final long storeTimestamp) {
         if (this.indexHeader.getIndexCount() < this.indexNum) {
-            int keyHash = indexKeyHashMethod(key);//计算索引key的哈市值
+            int keyHash = indexKeyHashMethod(key);//计算索引key的hash值
             //hashSlotNum 为一个索引文件包含的索引数量，取余即获取当前key在索引文件的hash槽，类似数组的中的index
             int slotPos = keyHash % this.hashSlotNum;
             //计算在索引文件的偏移量
