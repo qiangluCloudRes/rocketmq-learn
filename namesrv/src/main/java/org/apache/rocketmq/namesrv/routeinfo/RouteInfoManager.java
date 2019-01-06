@@ -132,7 +132,13 @@ public class RouteInfoManager {
                 //更新brokerName 对应的broker信息
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
-
+                /**
+                 * 新注册的broker节点，把broker上的topic信息注册到name server。producer发送消息前查询时，
+                 * 可以直接查询到对应topic的队列信息，所在broker的brokerName（利用brokerName查询broker IP地址）。
+                 *
+                 * 每个broker初始化时都会有一个TWB12 的默认topic，所以每个新注册的broker 的信息通过TWB12 topic都能查到，
+                 * 所以第一次创建topic时，查询TWB12 的信息，producer从master列表中根据均衡策略选择一个master节点发送数据
+                 */
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
                     if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
@@ -364,7 +370,7 @@ public class RouteInfoManager {
     }
 
     /**
-     * 根据topic 名称查询 topic路由信息
+     * 根据topic 名称查询 topic路由信息、broker节点ip信息
      * @param topic
      * @return
      */
@@ -382,6 +388,12 @@ public class RouteInfoManager {
         try {
             try {
                 this.lock.readLock().lockInterruptibly();
+                //根据topic查询队列信息，如可读队列数、可写队列数，以及该topic所在broker的brokerName。
+                /**
+                 * 默认topic是每个broker节点都会存在的，所以当新建topic时，起始查询的是默认topic TWB12 的信息
+                 * 所以能查询到当前集群中所有的broker节点的信息
+                 */
+
                 List<QueueData> queueDataList = this.topicQueueTable.get(topic);
                 if (queueDataList != null) {
                     topicRouteData.setQueueDatas(queueDataList);
