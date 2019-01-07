@@ -134,10 +134,17 @@ public class RouteInfoManager {
                 registerFirst = registerFirst || (null == oldAddr);
                 /**
                  * 新注册的broker节点，把broker上的topic信息注册到name server。producer发送消息前查询时，
-                 * 可以直接查询到对应topic的队列信息，所在broker的brokerName（利用brokerName查询broker IP地址）。
+                 * 可以直接查询到对应topic的队列信息，topic 所在节点broker的brokerName（然后利用brokerName查询broker IP地址）。
                  *
                  * 每个broker初始化时都会有一个TWB12 的默认topic，所以每个新注册的broker 的信息通过TWB12 topic都能查到，
                  * 所以第一次创建topic时，查询TWB12 的信息，producer从master列表中根据均衡策略选择一个master节点发送数据
+                 *
+                 * 当 producer 选择了某个broker master后，假如brokerName是 broker-a，会一直将消息发往该master，如果在producer运行期间master挂了，
+                 * 而且集群中也没有其他brokerName为broker-a的master节点，那么producer在重启前、或者挂掉的节点重启、或者新的
+                 * brokerName为broker-a的新节点假如集群，否则将会一直无法发送数据
+                 *
+                 * 假如两个broker master的brokerName相同，当broker注册到nameServer时,两个broker的地址被交替覆盖，所以producer每次
+                 * 到nameServer获取topicInfo时，得到的broker地址就不同，通过这种方式达到write/read 的高可用。read的高可用还可以通过slave达到
                  */
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
