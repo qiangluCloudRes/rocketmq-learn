@@ -267,6 +267,11 @@ public abstract class RebalanceImpl {
                 break;
             }
             case CLUSTERING: {
+                /**
+                 * 如果同一个consumerGroup 有新的消费者加入，这里做的是消费端的负载均衡，将队列分配给多个消费者消费
+                 *
+                 * 均衡操作由定时线程触发，每个一个短暂的时间发起一次检查
+                 */
                 //根据topic获取队列信息(topicSubscribeInfoTable 启动及定期name server获取)
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
                 //从name server 加载当前topic的消费者数量
@@ -343,28 +348,31 @@ public abstract class RebalanceImpl {
     private boolean updateProcessQueueTableInRebalance(final String topic, final Set<MessageQueue> mqSet,
         final boolean isOrder) {
         boolean changed = false;
-
+        //目前正在消费的队列
         Iterator<Entry<MessageQueue, ProcessQueue>> it = this.processQueueTable.entrySet().iterator();
         while (it.hasNext()) {
+            //遍历消费队列，判断是否因为有新的消费端加入，当前消费端不再需要消费某个队列。
+            // 如果沒有新的的消费端加入也需要做这一步操作，类似重新发请求拉取数据
             Entry<MessageQueue, ProcessQueue> next = it.next();
             MessageQueue mq = next.getKey();
             ProcessQueue pq = next.getValue();
 
             if (mq.getTopic().equals(topic)) {
-                if (!mqSet.contains(mq)) {
-                    pq.setDropped(true);
-                    if (this.removeUnnecessaryMessageQueue(mq, pq)) {
+                if (!mqSet.contains(mq)) {//经过本次均衡过后，接下來消费者要消费的队列不包含当前正在消费的这个队列
+                    pq.setDropped(true);//丢弃对这个队列的处理
+                    if (this.removeUnnecessaryMessageQueue(mq, pq)) {//删除无用的消费队列
                         it.remove();
                         changed = true;
                         log.info("doRebalance, {}, remove unnecessary mq, {}", consumerGroup, mq);
                     }
                 } else if (pq.isPullExpired()) {
+                    //均衡后，当前消费者继续消费这个队列，但是当前ProcessQueue 已过期（距离上一次拉取的时间太长）
                     switch (this.consumeType()) {
-                        case CONSUME_ACTIVELY:
+                        case CONSUME_ACTIVELY://如果是pull消费模式，这不做处理，因为消费者主动请求
                             break;
-                        case CONSUME_PASSIVELY:
+                        case CONSUME_PASSIVELY://如果是push模式，丢弃当前处理处理进度
                             pq.setDropped(true);
-                            if (this.removeUnnecessaryMessageQueue(mq, pq)) {
+                            if (this.removeUnnecessaryMessageQueue(mq, pq)) {//删除无用的消费队列
                                 it.remove();
                                 changed = true;
                                 log.error("[BUG]doRebalance, {}, remove unnecessary mq, {}, because pull is pause, so try to fixed it",
@@ -379,25 +387,33 @@ public abstract class RebalanceImpl {
         }
 
         List<PullRequest> pullRequestList = new ArrayList<PullRequest>();
-        for (MessageQueue mq : mqSet) {
+        for (MessageQueue mq : mqSet) {//上面执行了删除不再消费的队列，消费进度过期的队列。重新创建
             if (!this.processQueueTable.containsKey(mq)) {
+                //processQueueTable 不包含当前要消费的队列，那么是新增的消费队列或者 进度过期的队列被清除了
                 if (isOrder && !this.lock(mq)) {
                     log.warn("doRebalance, {}, add a new mq failed, {}, because lock failed", consumerGroup, mq);
                     continue;
                 }
 
                 this.removeDirtyOffset(mq);
+                /**
+                 *  创建新的消费队列，获取队列拉取起始偏移量，重新从broker获取最新的offset，作为下一次请求的起始位置
+                 */
                 ProcessQueue pq = new ProcessQueue();
-                //获取队列拉取起始偏移量，每次从broker获取最新的offset
+
                 long nextOffset = this.computePullFromWhere(mq);
                 if (nextOffset >= 0) {//创建请求
                     ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
                     if (pre != null) {
+                        //要拉取的队列请求已存在
                         log.info("doRebalance, {}, mq already exists, {}", consumerGroup, mq);
                     } else {
+                        //未存在
                         log.info("doRebalance, {}, add a new mq, {}", consumerGroup, mq);
                         PullRequest pullRequest = new PullRequest();
+                        //消费组
                         pullRequest.setConsumerGroup(consumerGroup);
+                        //拉取其实位置
                         pullRequest.setNextOffset(nextOffset);
                         pullRequest.setMessageQueue(mq);
                         pullRequest.setProcessQueue(pq);

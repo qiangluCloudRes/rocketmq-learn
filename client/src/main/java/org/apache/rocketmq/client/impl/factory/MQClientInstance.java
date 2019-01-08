@@ -984,10 +984,19 @@ public class MQClientInstance {
         boolean found = false;
 
         HashMap<Long/* brokerId */, String/* address */> map = this.brokerAddrTable.get(brokerName);
+        /**
+         * 在master-slave模式下，如果集群信息不变的话，consumer 只会往其中一个broker拉取数据，消费进度也会同步到
+         * master 和slave上，但是因为集群状态没有变化时，consumer一直往其中一个节点发送请求，不用担心两个节点之间的
+         * consumerOffset 不同步而导致的消息重复，只有当网络不好、或者是集群状态变化，consumer切换消费节点时才可能会出现消息重复。
+         *
+         * 如果master-master 模式下，因为两个master交替注册，所以consumer根据brokerName同步得到的broker地址会变化
+         * ，consumer会往两个master发送请求拉取数据，且两个master 的消费进度不会相互影响
+         */
         if (map != null && !map.isEmpty()) {
             for (Map.Entry<Long, String> entry : map.entrySet()) {
                 Long id = entry.getKey();
                 brokerAddr = entry.getValue();
+                //查找到符合的broker既可，不管是master还是salve。
                 if (brokerAddr != null) {
                     found = true;
                     if (MixAll.MASTER_ID == id) {

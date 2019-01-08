@@ -460,7 +460,7 @@ public class DefaultMessageStore implements MessageStore {
      * @param queueId Queue ID to query. 队列Id
      * @param offset Logical offset to start from. 拉取的偏移量
      * @param maxMsgNums Maximum count of messages to query.本次拉取的最大消息数量
-     * @param messageFilter Message filter used to screen desired messages.
+     * @param messageFilter Message filter used to screen desired messages.//消息过滤器
      * @return
      */
     public GetMessageResult getMessage(final String group, final String topic, final int queueId, final long offset,

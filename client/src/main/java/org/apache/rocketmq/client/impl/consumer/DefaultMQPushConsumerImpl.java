@@ -196,6 +196,10 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         this.offsetStore = offsetStore;
     }
 
+    /**
+     * consumer 拉去消息
+     * @param pullRequest
+     */
     public void pullMessage(final PullRequest pullRequest) {
         final ProcessQueue processQueue = pullRequest.getProcessQueue();
         if (processQueue.isDropped()) {
@@ -318,7 +322,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                                     processQueue,//队列消费进度信息
                                     pullRequest.getMessageQueue(),
                                     dispathToConsume);
-
+                                // 处理完消息之后继续提交请求，从新的pullRequest.getNextOffset() 开始拉取
                                 if (DefaultMQPushConsumerImpl.this.defaultMQPushConsumer.getPullInterval() > 0) {
                                     DefaultMQPushConsumerImpl.this.executePullRequestLater(pullRequest,
                                         DefaultMQPushConsumerImpl.this.defaultMQPushConsumer.getPullInterval());
@@ -397,6 +401,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         boolean commitOffsetEnable = false;
         long commitOffsetValue = 0L;
         if (MessageModel.CLUSTERING == this.defaultMQPushConsumer.getMessageModel()) {
+            //选择消费的broker，并从该broker 获取消费组的consumerOffset（broker收到的最新的由consumer 同步的consumerOffset）
             commitOffsetValue = this.offsetStore.readOffset(pullRequest.getMessageQueue(), ReadOffsetType.READ_FROM_MEMORY);
             if (commitOffsetValue > 0) {
                 commitOffsetEnable = true;
@@ -645,7 +650,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         this.updateTopicSubscribeInfoWhenSubscriptionChanged();
         this.mQClientFactory.checkClientInBroker();
         this.mQClientFactory.sendHeartbeatToAllBrokerWithLock();
-        this.mQClientFactory.rebalanceImmediately();//唤醒去broker拉取消息的线程
+        this.mQClientFactory.rebalanceImmediately();//唤醒去broker拉取消息的线程,并做消费端的负载均衡
     }
 
     private void checkConfig() throws MQClientException {
